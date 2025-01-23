@@ -22,7 +22,7 @@ default_payloads = [
     },
     {
         "name": "htmlanchortag",
-        "payload": "<a>#HOST#/?#LBL#</a>"
+        "payload": "<a href=\"#HOST#/?#LBL#\">anchortag</a>"
     },
     {
         "name": "markdownlink",
